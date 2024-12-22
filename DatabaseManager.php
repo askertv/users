@@ -47,7 +47,7 @@ class DatabaseManager
         $sql = "
             CREATE TABLE IF NOT EXISTS $tableName
             (
-                number INTEGER NOT NULL,
+                number BIGINT NOT NULL,
                 name VARCHAR(255) NOT NULL
             )
             ENGINE INNODB
