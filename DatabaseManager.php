@@ -33,6 +33,147 @@ class DatabaseManager
         return self::$instance;
     }
 
+    public function notifyUsers(int $messageId)
+    {
+        $resultSet = $this->pdo->query("SELECT title, description FROM messages WHERE id = $messageId AND status = 'ready_to_sent'");
+        $messageData = $resultSet->fetch();
+        if (empty($messageData)) {
+            return false;
+        }
+
+        $title = $messageData['title'];
+        $description = $messageData['description'];
+
+        // Выборка по всем пользователям, кроме тех, по которым уже успешно отослали рассылку
+        $sql = "
+            SELECT
+                t.number
+            FROM
+                {$this->tableName} t
+            LEFT JOIN
+                messages_pool p ON p.number = t.number AND p.message_id = $messageId AND status = 'sent'
+            WHERE
+                p.number IS NULL";
+
+        $resultSet = $this->pdo->query($sql);
+
+        $notificationResult = true;
+
+        // Фиктивная функция отправки рассылки
+        $notifyFunction = function(string $title, string $message, int $number) {
+            return true;
+        };
+
+        while ($row = $resultSet->fetch()) {
+            $number = (int)$row['number'];
+
+            if ($notifyFunction($title, $description, $number)) {
+                $sqlInsert = "
+                    INSERT INTO
+                        messages_pool
+                    SET
+                        message_id = $messageId,
+                        number = $number,
+                        status = 'sent'";
+
+                $this->pdo->exec($sqlInsert);
+
+                if ($this->pdo->errorCode() !== '00000') {
+                    print_r($this->pdo->errorInfo());
+
+                    $notificationResult = false;
+                }
+            } else {
+                $notificationResult = false;
+            }
+        }
+
+        if ($notificationResult) {
+            $sql = "
+                UPDATE
+                    messages
+                SET
+                    status = 'completed'
+                WHERE
+                    id = $messageId";
+
+            $this->pdo->exec($sql);
+
+            if ($this->pdo->errorCode() !== '00000') {
+                print_r($this->pdo->errorInfo());
+            }
+        }
+    }
+
+    public function tryCreateTableMessages(): bool
+    {
+        $sql = "
+            CREATE TABLE IF NOT EXISTS messages
+            (
+                id INTEGER NOT NULL AUTO_INCREMENT,
+                title VARCHAR(255) NOT NULL,
+                description TEXT NOT NULL,
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                status ENUM('draft', 'ready_to_sent', 'active', 'inactive', 'completed'),
+                PRIMARY KEY (id)
+            )
+            ENGINE INNODB
+            ";
+
+        $this->pdo->exec($sql);
+
+        if ($this->pdo->errorCode() !== '00000') {
+            print_r($this->pdo->errorInfo());
+
+            return false;
+        }
+
+        $sql = "
+            CREATE TABLE IF NOT EXISTS messages_pool
+            (
+                message_id INTEGER NOT NULL,
+                number BIGINT NOT NULL,
+                status ENUM('sent', 'error'),
+                errors TEXT,
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+            ENGINE INNODB
+            ";
+
+        $this->pdo->exec($sql);
+
+        if ($this->pdo->errorCode() !== '00000') {
+            print_r($this->pdo->errorInfo());
+
+            return false;
+        }
+
+        return true;
+    }
+
+    public function createMessage(string $title, string $message, string $status = 'draft'): int
+    {
+        $sql = "
+            INSERT INTO
+                messages
+            SET
+                title = '$title',
+                description = '$message',
+                status = '$status'";
+
+        $this->pdo->exec($sql);
+
+        if ($this->pdo->errorCode() !== '00000') {
+            print_r($this->pdo->errorInfo());
+
+            return 0;
+        }
+
+        return $this->pdo->lastInsertId();
+    }
+
     public function importData(string $fileName): bool
     {
         $resultCreateTable = $this->tryCreateTable($this->tableName);
